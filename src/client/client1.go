@@ -3,11 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
-	"strconv"
 
 	"github.com/golang/protobuf/proto"
 
@@ -24,33 +24,34 @@ func main() {
 	fmt.Println("succeed connected to server")
 	defer conn.Close()
 	go readfromServer(conn)
+	reader := bufio.NewReader(os.Stdin)
 	for {
-		reader := bufio.NewReader(os.Stdin)
-		input, _, err := reader.ReadLine()
-		//string(input[0 : len(input)-1])
-
+		loginReq := &protocol.LoginRequest{}
+		err := binary.Read(reader, binary.LittleEndian, &loginReq.UserID)
 		if err != nil {
-			fmt.Println("fail to read ")
+			fmt.Println("wrong user id")
 			continue
 		}
-		if len(input) > 0 {
-			loginReq := &protocol.LoginRequest{}
-			loginReq.UserID = strconv.Atoi(input)
 
-			data, err := proto.Marshal(loginReq)
-			fmt.Println(packed)
+		data, err := proto.Marshal(loginReq)
+		if err != nil {
+			fmt.Println("wrong user id")
+			continue
+		}
 
-			// loginReq
-			size := len(packed)
-			b := make([]byte, 2+size)
-			buffer := bytes.NewBuffer(b)
-			buffer.Write(size)
-			buffer.Write(packed)
-			_, err := conn.Write(buffer)
-			if err != nil {
-				fmt.Println("failed to write to server")
-				return
-			}
+		size := len(data)
+		out := bytes.NewBuffer(make([]byte, 2+size))
+		if err := binary.Write(out, binary.LittleEndian, size); err != nil {
+			// TODO
+		}
+		if err := binary.Write(out, binary.LittleEndian, data); err != nil {
+			// TODO
+		}
+
+		_, err = conn.Write(out.Bytes())
+		if err != nil {
+			fmt.Println("failed to write to server")
+			return
 		}
 	}
 }
