@@ -1,23 +1,22 @@
 MKDIR=mkdir -p
 XARGS=xargs
 
-OS=$(shell uname -s)
+OS=Win32
 
-ROOT=$(PWD)
+ROOT="D:\\gitSpace\\go_third_lib\\src\\chatserver\\chatserver"
 
-BINPATH=$(ROOT)/bin:$(ROOT)/contrib/bin
+BINPATH=$(ROOT)/bin;$(ROOT)/contrib/bin
 CONFPATH=$(ROOT)/conf
 
-export GOPATH:=$(GOPATH):$(ROOT)
-export PATH:=$(BINPATH):$(PATH)
+export GOPATH:=$(GOPATH);$(ROOT)
+export PATH:=$(BINPATH);$(PATH)
 GO_BIN_PATH=$(firstword $(subst :, ,$(GOPATH)))
 
 .PHONY: build clean contrib deps fmt init install proto proto_dbg
 
 VER=`git show --quiet --pretty=%H%d`
 build: protocol fmt
-	@#echo "package main\n var V = \"$(VER)\"" > src/server/v.go
-	@cd src && go install -v *
+	@cd src && go install -v client server
 
 clean:
 	@git clean -dxf
@@ -30,7 +29,7 @@ deps:
 	@cd src && go get -t -v *
 
 fmt:
-	@cd src && goimports -w *
+	@cd src && go fmt client server
 
 init: contrib/bin/protoc deps dirs
 
@@ -59,7 +58,7 @@ test: protocol fmt
 PB_FILES := $(wildcard protocol/*.proto)
 
 PROTOC_GEN_GO=$(GO_BIN_PATH)/bin/protoc-gen-go
-PB_GO_DIR=src/protocol
+PB_GO_DIR=src
 PB_GO_FILES := $(patsubst protocol/%.proto,$(PB_GO_DIR)/%.pb.go,$(PB_FILES))
 PKG_PROTO=pkg/$(OS)_amd64/protocol.a
 
@@ -71,7 +70,7 @@ proto_dbg:
 	@echo $(PB_TS_DIR)
 	@echo $(PB_TS_FILES)
 
-protocol: $(PROTOC_GEN_GO) $(PB_GO_DIR) $(PKG_PROTO) $(PB_TS_DIR) $(PROTOC_GEN_TS) $(PB_TS_FILES)
+protocol: $(PKG_PROTO)
 
 $(PROTOC_GEN_GO):
 	@go get -u -v github.com/golang/protobuf/protoc-gen-go
@@ -83,5 +82,5 @@ $(PB_GO_DIR)/%.pb.go: protocol/%.proto
 	@echo $^
 
 $(PKG_PROTO): $(PB_FILES) $(PB_GO_FILES)
-	protoc -I=protocol/ --go_out=$(PB_GO_DIR) protocol/*.proto
+	protoc --go_out=$(PB_GO_DIR) protocol/chat.proto
 	cd src && go install protocol

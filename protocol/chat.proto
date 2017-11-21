@@ -1,9 +1,12 @@
 syntax = "proto3";
 
-import "types.proto";
 
 package protocol;
 
+enum ErrorCode {
+    OK = 0;
+    FAILED = 1;
+}
 
 message LoginRequest {
     int64 userID = 1;
