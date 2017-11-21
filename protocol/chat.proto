@@ -1,22 +1,77 @@
 syntax = "proto3";
 
-
 package protocol;
 
 enum ErrorCode {
-    OK = 0;
-    FAILED = 1;
+    EC_OK = 0;
+    // login error
+    EC_LOGIN_AUTH_FAILED = 1001;
+    // private chat error
+    EC_CHAT_NO_TARGET = 2001;
+    // room error
+    EC_ROOM_NO_ROOM = 3001;
+    EC_ROOM_ALREADY_EXISTS = 3002;
 }
 
+// login
+
+// 登录
 message LoginRequest {
     int64 userID = 1;
 }
 
 message LoginResponse {
-  ErrorCode ec = 1;
+    ErrorCode ec = 1;
 }
 
-message Message {
-  int64 target = 1;
-  string content = 2;
+// private chat
+
+// 私聊
+message PrivateChatRequest {
+    int64 target = 1;
+    string content = 2;
+}
+
+message PrivateChatResponse {
+    ErrorCode ec = 1;
+    string content = 2;
+}
+
+message PrivateChatNotify {
+    string content = 1;
+}
+
+// room
+
+// 创建聊天室
+message RoomCreateRequest {
+    string name = 1; // 聊天室名
+}
+
+message RoomCreateResponse {
+    ErrorCode ec = 1;
+    int64 roomID = 2;
+}
+
+// 加入聊天室
+message RoomJoinRequest {
+    int64 roomID = 1;
+}
+
+message RoomJoinResponse {
+    ErrorCode ec = 1;
+}
+
+// 聊天室聊天
+message RoomChatRequest {
+    int64 roomID = 1;
+    string content = 2;
+}
+
+message RoomChatResponse {
+    ErrorCode ec = 1;
+}
+
+message RoomChatNotify {
+    string content = 1;
 }
