@@ -2,10 +2,16 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"strconv"
+
+	"github.com/golang/protobuf/proto"
+
+	"protocol"
 )
 
 func main() {
@@ -28,7 +34,19 @@ func main() {
 			continue
 		}
 		if len(input) > 0 {
-			_, err := conn.Write(input)
+			loginReq := &protocol.LoginRequest{}
+			loginReq.UserID = strconv.Atoi(input)
+
+			data, err := proto.Marshal(loginReq)
+			fmt.Println(packed)
+
+			// loginReq
+			size := len(packed)
+			b := make([]byte, 2+size)
+			buffer := bytes.NewBuffer(b)
+			buffer.Write(size)
+			buffer.Write(packed)
+			_, err := conn.Write(buffer)
 			if err != nil {
 				fmt.Println("failed to write to server")
 				return

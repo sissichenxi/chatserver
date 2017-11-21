@@ -1,9 +1,19 @@
 syntax = "proto3";
 
+import "types.proto";
+
+package protocol;
+
+
 message LoginRequest {
-    int64 user_id = 1;
+    int64 userID = 1;
+}
+
+message LoginResponse {
+  ErrorCode ec = 1;
 }
 
 message Message {
-
+  int64 target = 1;
+  string content = 2;
 }

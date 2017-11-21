@@ -1,0 +1,7 @@
+syntax = "proto3";
+package protocol;
+
+enum ErrorCode {
+    OK = 0;
+    FAILED = 1;
+}

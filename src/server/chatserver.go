@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+
+	"github.com/golang/protobuf/proto"
+
+	"protocol"
 )
 
 func main() {
@@ -109,13 +113,22 @@ func handleConnection(conn net.Conn, msgchannel map[int]chan map[int]string) {
 		fmt.Printf("%d\n", tgtUserID)
 		fmt.Printf("%d\n", currUserID)
 		for {
-			data := make([]byte, 1024)
+			head := make([]byte, 2)
+			n, err := conn.Read(data)
+
+			size := tonumber(head)
+			data := make([]byte, size)
 			n, err := conn.Read(data)
 			if err != nil {
 				fmt.Println("read data wrong:", err)
 				close <- true
 				continue
 			}
+
+			loginReq := &protocol.LoginRequest{}
+			err = proto.Unmarshal(data, loginReq)
+
+			fmt.Println(loginReq.UserID)
 			datastr := string(data[:n])
 			//fmt.Println(string(currUserID) + "send to " + string(tgtUserID) + ": " + datastr)
 			fmt.Printf("%d send to %d : %s\n", currUserID, tgtUserID, datastr)
