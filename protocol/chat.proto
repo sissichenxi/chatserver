@@ -8,10 +8,29 @@ enum ErrorCode {
     EC_LOGIN_AUTH_FAILED = 1001;
     // private chat error
     EC_CHAT_NO_TARGET = 2001;
+    EC_CHAT_TARGET_OFFLINE = 2002;
     // room error
     EC_ROOM_NO_ROOM = 3001;
     EC_ROOM_ALREADY_EXISTS = 3002;
+    EC_ROOM_ALREADY_FULL = 3003;
 }
+enum MsgType{
+    //request types
+    MT_LOGIN_REQUEST=0;
+    MT_PRIVCHAT_REQUEST=1;
+    MT_RMCREAT_REQUEST=2;
+    MT_RMJOIN_REQUEST=3;
+    MT_RMCHAT_REQUSET=4;
+    //response types
+    MT_LOGIN_RESPONSE=5;
+    MT_PRIVCHAT_RESPONSE=6;
+    MT_RMCREAT_RESPOSE=7;
+    MT_RMJOIN_RESPONSE=8;
+    MT_RMCHAT_RESPONSE=9;
+    //notify types
+    MT_PRIVCHAT_NOYIFY=10;
+    MT_RMCHAT_NOTIFY=11;
+    }
 
 // login
 
@@ -34,11 +53,12 @@ message PrivateChatRequest {
 
 message PrivateChatResponse {
     ErrorCode ec = 1;
-    string content = 2;
+    //string content = 2;
 }
 
 message PrivateChatNotify {
-    string content = 1;
+    int64 src=1;
+    string content = 2;
 }
 
 // room
@@ -56,6 +76,7 @@ message RoomCreateResponse {
 // 加入聊天室
 message RoomJoinRequest {
     int64 roomID = 1;
+    int64 userID = 2;
 }
 
 message RoomJoinResponse {
@@ -73,5 +94,7 @@ message RoomChatResponse {
 }
 
 message RoomChatNotify {
-    string content = 1;
+    int64 userID = 1;
+    int64 roomID = 2;
+    string content = 3;
 }
