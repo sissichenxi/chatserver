@@ -87,6 +87,7 @@ func main() {
 	roomidgetter := new(IDgetter)
 	//消息管道
 	msgchnl := make(map[int64]chan []byte)
+	offlinechan := make(map[int64]chan bool)
 	chatrooms := make(map[int64]*ChatRoom)
 
 	for {
@@ -94,7 +95,7 @@ func main() {
 		if err != nil {
 			continue
 		}
-		go handleConnection(conn, msgchnl, chatrooms, roomidgetter, db)
+		go handleConnection(conn, msgchnl, offlinechan, chatrooms, roomidgetter, db)
 	}
 }
 
@@ -102,7 +103,7 @@ func main() {
 
 //var userconnmap map[int]net.Conn = make(map[int]net.Conn, 10)
 
-func handleConnection(conn net.Conn, msgchannel map[int64]chan []byte,
+func handleConnection(conn net.Conn, msgchannel map[int64]chan []byte, offlinechan map[int64]chan bool,
 	chatroom map[int64]*ChatRoom, idgetter *IDgetter, db *mgo.Database) {
 	addr := conn.RemoteAddr()
 	fmt.Printf("client %s:%s connected to server\n", addr.Network(), addr.String())
@@ -116,6 +117,10 @@ func handleConnection(conn net.Conn, msgchannel map[int64]chan []byte,
 				delete(msgchannel, currUserID)
 				fmt.Printf("delete userid [%v] from msgChannel", currUserID)
 			}
+			if _, exist := offlinechan[currUserID]; exist {
+				delete(offlinechan, currUserID)
+				fmt.Printf("delete userid [%v] from msgChannel", currUserID)
+			}
 		}
 	}()
 
@@ -126,9 +131,10 @@ func handleConnection(conn net.Conn, msgchannel map[int64]chan []byte,
 	go func() {
 
 		for {
-			data, msgtype, err := readmsg(reader)
+			data, msgtype, err := readmsg(reader, close)
 			if err != nil {
 				panic(err)
+				//return
 			}
 			var respbody []byte
 			var resptype protocol.MsgType
@@ -136,7 +142,8 @@ func handleConnection(conn net.Conn, msgchannel map[int64]chan []byte,
 			//parse message body upon type
 			switch msgtype {
 			case protocol.MsgType_MT_LOGIN_REQUEST:
-				respbody, currUserID, resptype, err = caseLoginReq(data, chatroom, &Login, msgchannel, conn)
+				respbody, currUserID, resptype, err = caseLoginReq(data, chatroom, &Login, offlinechan, msgchannel, conn)
+				fmt.Println(currUserID)
 			case protocol.MsgType_MT_PRIVCHAT_REQUEST:
 				respbody, resptype, err = casePrivchatReq(data, currUserID, chatroom, msgchannel)
 			case protocol.MsgType_MT_RMCREAT_REQUEST:
@@ -145,7 +152,6 @@ func handleConnection(conn net.Conn, msgchannel map[int64]chan []byte,
 				respbody, resptype, err = caseRmjoinReq(data, currUserID, chatroom, msgchannel)
 			case protocol.MsgType_MT_RMCHAT_REQUSET:
 				respbody, resptype, err = caseRmchatReq(data, currUserID, chatroom, msgchannel)
-
 			default:
 				fmt.Println("Wrong msg type!")
 			}
@@ -164,38 +170,44 @@ func handleConnection(conn net.Conn, msgchannel map[int64]chan []byte,
 		}
 	}
 }
-func readmsg(reader *bufio.Reader) (data []byte, msgtype protocol.MsgType, err error) {
+func readmsg(reader *bufio.Reader, closechan chan bool) (data []byte, msgtype protocol.MsgType, err error) {
 	//read message type
 	mtype := make([]byte, 2)
-	if err := binary.Read(reader, binary.LittleEndian, mtype); err != nil {
+	if err = binary.Read(reader, binary.LittleEndian, mtype); err != nil {
 		fmt.Println("read msgtype bytes wrong!")
+		closechan <- true
+		return nil, msgtype, nil
 	}
 	fmt.Println("start read msg type...")
 	var msgtype16 int16
 	typebuf := bytes.NewBuffer(mtype)
 	if err := binary.Read(typebuf, binary.LittleEndian, &msgtype16); err != nil {
 		fmt.Println("read msgtype int wrong!")
+		return nil, msgtype, err
 	}
 
 	fmt.Printf("received msgtype %d\n", msgtype16)
 	msgtype = protocol.MsgType(msgtype16)
 	//read message size
 	head := make([]byte, 2)
-	if err := binary.Read(reader, binary.LittleEndian, head); err != nil {
+	if err = binary.Read(reader, binary.LittleEndian, head); err != nil {
 		fmt.Println("read msgsize bytes wrong!")
+		return nil, msgtype, err
 	}
 	fmt.Println("start read msg size...")
 	var size16 int16
 	buf := bytes.NewBuffer(head)
-	if err := binary.Read(buf, binary.LittleEndian, &size16); err != nil {
+	if err = binary.Read(buf, binary.LittleEndian, &size16); err != nil {
 		fmt.Println("read msgsize int wrong!")
+		return nil, msgtype, err
 	}
 	size := int(size16)
 	fmt.Printf("received msg size %d\n", size)
 	//read message
 	d := make([]byte, size)
-	if err := binary.Read(reader, binary.LittleEndian, d); err != nil {
+	if err = binary.Read(reader, binary.LittleEndian, d); err != nil {
 		fmt.Println("read msgtype bytes wrong!")
+		return nil, msgtype, err
 	}
 	return d, msgtype, err
 }
@@ -224,50 +236,27 @@ func casePrivchatReq(data []byte, currUserID int64, chatroom map[int64]*ChatRoom
 		fmt.Println("marshal private chat request failed!")
 	}
 	//to check if the tgt user exists from db
-	// c := db.C("users")
-	// res := c.Find(bson.M{"userid": currUserID})
-	// if cnt, _ := res.Count(); cnt < 1 {
-	// 	privChatResp.Ec = protocol.ErrorCode_EC_CHAT_NO_TARGET
-	// } else {
-	// 	fmt.Println(privChatReq.Target)
+
 	privChatNotify := &protocol.PrivateChatNotify{}
 	privChatNotify.Src = currUserID
 	privChatNotify.Content = privChatReq.Content
 
-	// 	c := db.C("privmsgtable")
-	// 	privmsg := new(PrivMsg)
-	// 	t := time.Now()
-	// 	privmsg.Time = t
-	// 	privmsg.Msgid = t.UnixNano()
-	// 	privmsg.Senderid = currUserID
-	// 	privmsg.Tgtid = privChatReq.Target
-	// 	privmsg.MsgDetail = privChatReq.Content
-	// 	if err := c.Insert(privmsg); err != nil {
-	// 		panic(err)
-	// 	}
-	// if _, online := msgchannel[privChatReq.Target]; online == false {
-	// 	privChatResp.Ec = protocol.ErrorCode_EC_CHAT_TARGET_OFFLINE
-	// 	privofflinecln := db.C("privofflinemsg")
-	// 	pvofflmsg := new(PrivOfflineMsg)
-	// 	pvofflmsg.Msgid = privmsg.Msgid
-	// 	pvofflmsg.Tgtid = privmsg.Tgtid
-	// 	if err := privofflinecln.Insert(pvofflmsg); err != nil {
-	// 		panic(err)
-	// 	}
-
-	// } else {
 	//target is online, send notify msg to channel
+
 	if tgtchannel, online := msgchannel[privChatReq.Target]; online {
-		notifytype := protocol.MsgType_MT_PRIVCHAT_NOYIFY
-		notifymsg, err := proto.Marshal(privChatNotify)
-		if err != nil {
-			fmt.Println("marshal faliled!")
+		if privChatReq.Target != currUserID {
+			notifytype := protocol.MsgType_MT_PRIVCHAT_NOYIFY
+			notifymsg, err := proto.Marshal(privChatNotify)
+			if err != nil {
+				fmt.Println("marshal faliled!")
+			}
+			notify, err := writeBuffer(notifytype, notifymsg)
+			if err != nil {
+				panic(err)
+			}
+			tgtchannel <- notify.Bytes()
 		}
-		notify, err := writeBuffer(notifytype, notifymsg)
-		if err != nil {
-			panic(err)
-		}
-		tgtchannel <- notify.Bytes()
+
 	} else {
 		privChatResp.Ec = protocol.ErrorCode_EC_CHAT_NO_TARGET
 	}
@@ -281,7 +270,7 @@ func casePrivchatReq(data []byte, currUserID int64, chatroom map[int64]*ChatRoom
 	return
 }
 
-func caseLoginReq(data []byte, chatroom map[int64]*ChatRoom, login *bool,
+func caseLoginReq(data []byte, chatroom map[int64]*ChatRoom, login *bool, offlinechan map[int64]chan bool,
 	msgchannel map[int64]chan []byte, conn net.Conn) (respbody []byte, currUserID int64, resptype protocol.MsgType, err error) {
 	loginReq := &protocol.LoginRequest{}
 	loginRes := &protocol.LoginResponse{}
@@ -297,78 +286,42 @@ func caseLoginReq(data []byte, chatroom map[int64]*ChatRoom, login *bool,
 			currUserID = loginReq.UserID
 			*login = true
 			//notify previous offline first
+			if prevchan, online := msgchannel[loginReq.UserID]; online {
+				offnotify := &protocol.OfflineNotify{}
+				offnotify.UserID = loginReq.UserID
+				notifytype := protocol.MsgType_MT_OFFLINE_NOYIFY
+				notifymsg, err := proto.Marshal(offnotify)
+				if err != nil {
+					fmt.Println("marshal faliled!")
+				}
+				notify, err := writeBuffer(notifytype, notifymsg)
+				if err != nil {
+					panic(err)
+				}
+				prevchan <- notify.Bytes()
+				offlinechan[loginReq.UserID] <- true
+			}
 			msgchannel[currUserID] = make(chan []byte)
+			offlinechan[currUserID] = make(chan bool)
 			go func() {
 				for {
+					if *login == false {
+						break
+					}
 					data := <-msgchannel[currUserID]
 					if _, err := conn.Write(data); err != nil {
 						//close <- true
 					}
 				}
 			}()
+			go func() {
+				for {
+					if <-offlinechan[currUserID] {
+						*login = false
+					}
+				}
+			}()
 		}
-
-		// //pull offline msg
-		// //private chat
-		// var privofflmsg []PrivOfflineMsg
-		// c := db.C("privofflinemsg")
-		// c.Find(bson.M{"tgtid": currUserID}).All(privofflmsg)
-		// for _, eachmsg := range privofflmsg {
-		// 	pmsgcln := db.C("privmsgtable")
-		// 	var privmsg PrivMsg
-		// 	pmsgcln.Find(bson.M{"msgid": eachmsg.Msgid}).One(privmsg)
-		// 	pmsgnotify := &protocol.PrivateChatNotify{}
-		// 	pmsgnotify.Src = privmsg.Senderid
-		// 	pmsgnotify.Content = privmsg.MsgDetail
-		// 	notifytype := protocol.MsgType_MT_PRIVCHAT_NOYIFY
-		// 	notifymsg, err := proto.Marshal(pmsgnotify)
-		// 	if err != nil {
-		// 		fmt.Println("marshal faliled!")
-		// 	}
-		// 	size := len(notifymsg)
-		// 	notify := bytes.NewBuffer(make([]byte, 4+size))
-		// 	if err := binary.Write(notify, binary.LittleEndian, uint16(notifytype)); err != nil {
-		// 		//TODO
-		// 	}
-		// 	if err := binary.Write(notify, binary.LittleEndian, uint16(size)); err != nil {
-		// 		//TODO
-		// 	}
-		// 	if err := binary.Write(notify, binary.LittleEndian, notifymsg); err != nil {
-		// 		//TODO
-		// 	}
-		// 	msgchannel[privmsg.Tgtid] <- notify.Bytes()
-		// }
-		// //roomchat
-		// var rmofflmsg []RoomOfflineMsg
-		// roomc := db.C("rmofflinemsg")
-		// roomc.Find(bson.M{"userid": currUserID}).All(rmofflmsg)
-		// for _, eachmsg := range rmofflmsg {
-		// 	rmsgcln := db.C("roomchatmsg")
-		// 	var rmmsg RoomMsg
-		// 	rmsgcln.Find(bson.M{"msgid": eachmsg.Msgid}).One(rmmsg)
-		// 	rmsgnotify := &protocol.RoomChatNotify{}
-		// 	rmsgnotify.RoomID = rmmsg.Roomid
-		// 	rmsgnotify.UserID = rmmsg.Senderid
-		// 	rmsgnotify.Content = rmmsg.MsgDetail
-		// 	notifytype := protocol.MsgType_MT_RMCHAT_NOTIFY
-		// 	notifymsg, err := proto.Marshal(rmsgnotify)
-		// 	if err != nil {
-		// 		fmt.Println("marshal faliled!")
-		// 	}
-		// 	size := len(notifymsg)
-		// 	notify := bytes.NewBuffer(make([]byte, 4+size))
-		// 	if err := binary.Write(notify, binary.LittleEndian, uint16(notifytype)); err != nil {
-		// 		//TODO
-		// 	}
-		// 	if err := binary.Write(notify, binary.LittleEndian, uint16(size)); err != nil {
-		// 		//TODO
-		// 	}
-		// 	if err := binary.Write(notify, binary.LittleEndian, notifymsg); err != nil {
-		// 		//TODO
-		// 	}
-		// 	msgchannel[currUserID] <- notify.Bytes()
-		// }
-
 	}
 
 	resptype = protocol.MsgType_MT_LOGIN_RESPONSE
@@ -392,16 +345,7 @@ func caseRmCreateReq(data []byte, currUserID int64, chatroom map[int64]*ChatRoom
 	//sync
 	rmChatCreatResp.RoomID = idgetter.spanNextID()
 	rmChatCreatResp.Ec = protocol.ErrorCode_EC_OK
-	// c := db.C("chatrooms")
-	// res := c.Find(bson.M{"roomid": rmChatCreatResp.RoomID})
-	// if cnt, _ := res.Count(); cnt < 1 {
-	// 	//generate room info
-	// 	pchatroom := new(ChatRoom)
-	// 	pchatroom.RoomID = rmChatCreatResp.RoomID
-	// 	pchatroom.RoomName = rmChatCreatReq.Name
-	// 	pchatroom.UserIDs = []int64{currUserID}
-	// 	pchatroom.UserCnt = 1
-	// 	c.Insert(pchatroom)
+
 	if _, online := chatroom[rmChatCreatResp.RoomID]; online {
 		rmChatCreatResp.Ec = protocol.ErrorCode_EC_ROOM_ALREADY_EXISTS
 	} else {
@@ -429,16 +373,7 @@ func caseRmjoinReq(data []byte, curID int64, chatroom map[int64]*ChatRoom,
 	if err = proto.Unmarshal(data, rmJoinReq); err != nil {
 		//TODO
 	}
-	// c := db.C("chatrooms")
-	// res := c.Find(bson.M{"roomid": rmJoinReq.RoomID})
-	// if cnt, _ := res.Count(); cnt < 1 {
-	// 	rmJoinResp.Ec = protocol.ErrorCode_EC_ROOM_NO_ROOM
-	// } else {
-	// 	rmJoinResp.Ec = protocol.ErrorCode_EC_OK
-	// 	c.Update(bson.M{"roomid": rmJoinReq.RoomID}, bson.M{"$inc": bson.M{"usercnt": 1}})
-	// 	c.Update(bson.M{"roomid": rmJoinReq.RoomID}, bson.M{"$push": bson.M{"userids": currUserID}})
 
-	// }
 	if pchatroom, online := chatroom[rmJoinReq.RoomID]; online {
 		rmJoinResp.Ec = protocol.ErrorCode_EC_OK
 		pchatroom.UserIDs = append(pchatroom.UserIDs, curID)
@@ -469,22 +404,6 @@ func caseRmchatReq(data []byte, curID int64, chatroom map[int64]*ChatRoom,
 	rmchatNotify.RoomID = rmChatReq.RoomID
 	rmchatNotify.Content = rmChatReq.GetContent()
 
-	// c := db.C("chatrooms")
-	// res := c.Find(bson.M{"roomid": rmChatReq.RoomID})
-	// if cnt, _ := res.Count(); cnt == 1 {
-	// 	pchatroom := new(ChatRoom)
-	// 	if err := res.One(pchatroom); err == nil {
-	// 		//store group msg
-	// 		roommsg := new(RoomMsg)
-	// 		t := time.Now()
-	// 		roommsg.Time = t
-	// 		roommsg.Msgid = t.UnixNano()
-	// 		roommsg.Roomid = pchatroom.RoomID
-	// 		roommsg.Senderid = currUserID
-	// 		roommsg.MsgDetail = rmChatReq.Content
-	// 		rmsgCl := db.C("roomchatmsg")
-	// 		rmsgCl.Insert(roommsg)
-	// 		for _, groupUser := range pchatroom.UserIDs {
 	if _, exist := chatroom[rmChatReq.RoomID]; exist == true {
 		for _, groupUser := range chatroom[rmChatReq.RoomID].UserIDs {
 			if _, online := msgchannel[groupUser]; online == true {
@@ -500,11 +419,7 @@ func caseRmchatReq(data []byte, curID int64, chatroom map[int64]*ChatRoom,
 				msgchannel[groupUser] <- notify.Bytes()
 			} else {
 				//store  offline msg
-				// rmOfflinemsg := new(RoomOfflineMsg)
-				// rmOfflinemsg.Msgid = roommsg.Msgid
-				// rmOfflinemsg.Userid = groupUser
-				// rmsgCl := db.C("rmofflinemsg")
-				// rmsgCl.Insert(rmOfflinemsg)
+
 			}
 		}
 	} else {
