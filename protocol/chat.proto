@@ -28,8 +28,9 @@ enum MsgType{
     MT_RMJOIN_RESPONSE=8;
     MT_RMCHAT_RESPONSE=9;
     //notify types
-    MT_PRIVCHAT_NOYIFY=10;
-    MT_RMCHAT_NOTIFY=11;
+    MT_OFFLINE_NOYIFY=10;
+    MT_PRIVCHAT_NOYIFY=11;
+    MT_RMCHAT_NOTIFY=12;
     }
 
 // login
@@ -43,6 +44,9 @@ message LoginResponse {
     ErrorCode ec = 1;
 }
 
+message OfflineNotify {
+    int64 userID = 1;
+}
 // private chat
 
 // 私聊
