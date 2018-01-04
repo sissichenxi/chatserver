@@ -20,17 +20,25 @@ import (
 	"gopkg.in/mgo.v2"
 )
 
-func initdata(db *mgo.Database) {
+func initdata(db *mgo.Database, iddist *IDdistributor) {
+
 	usermap = make(map[int64]*userInfo)
+	roommap = make(map[int64]*roomInfo)
 	cusers := db.C("users")
 	cusers.Find(nil).All(&userRel)
 	crooms := db.C("rooms")
 	crooms.Find(nil).All(&chatRooms)
-	for _, user := range userRel {
-		usermap[user.Userid] = &user
+	for n := 0; n < len(userRel); n++ {
+		usermap[userRel[n].Userid] = &userRel[n]
 	}
-	for _, room := range chatRooms {
-		roommap[room.Roomid] = &room
+	for n := 0; n < len(chatRooms); n++ {
+		roommap[chatRooms[n].Roomid] = &chatRooms[n]
+	}
+	var roomid roomID
+	croomid := db.C("roomid")
+
+	if err := croomid.Find(nil).One(&roomid); err == nil {
+		iddist.roomid = roomid.Roomid
 	}
 }
 
@@ -38,14 +46,15 @@ func main() {
 
 	session, err := mgo.Dial("localhost")
 	db := session.DB("chat")
-	initdata(db)
+
 	link, err := net.Listen("tcp", ":8080")
 	if err != nil {
 		fmt.Println("tcp chatserver listen failed!")
 		return
 	}
 	fmt.Println("tcp chatserver listen start!")
-	roomidgetter := new(IDgetter)
+	iddist := new(IDdistributor)
+	initdata(db, iddist)
 	//消息管道
 	msgchnl := make(map[int64]chan []byte)
 	offlinechan := make(map[int64]chan bool)
@@ -58,12 +67,12 @@ func main() {
 		if err != nil {
 			continue
 		}
-		go handleConnection(conn, msgchnl, offlinechan, roomidgetter, db)
+		go handleConnection(conn, msgchnl, offlinechan, iddist, db)
 	}
 }
 
 func handleConnection(conn net.Conn, msgchannel map[int64]chan []byte, offlinechan map[int64]chan bool,
-	idgetter *IDgetter, db *mgo.Database) {
+	idgetter *IDdistributor, db *mgo.Database) {
 	addr := conn.RemoteAddr()
 	fmt.Printf("client %s:%s connected to server\n", addr.Network(), addr.String())
 	var currUserID int64
@@ -91,6 +100,7 @@ func handleConnection(conn net.Conn, msgchannel map[int64]chan []byte, offlinech
 			cusers.Insert(usermap[currUserID])
 		}
 		cusers.Update(bson.M{"userid": currUserID}, bson.M{"$set": bson.M{"offlinetime": time.Now(), "chatrooms": usermap[currUserID].ChatRooms}})
+		//cusers.Upsert(bson.M{"userid": currUserID}, bson.M{"$set": bson.M{"offlinetime": time.Now(), "chatrooms": usermap[currUserID].ChatRooms}})
 		cpmsg := db.C("privmsg")
 		for _, pmsg := range pMsg {
 			cpmsg.Insert(pmsg)
@@ -274,14 +284,17 @@ func caseLoginReq(data []byte, login *bool, offlinechan map[int64]chan bool, msg
 func pullmsg(db *mgo.Database, curid int64, conn net.Conn) {
 	cuser := db.C("users")
 	var offtime time.Time
-	if err := cuser.Find(bson.M{"userid": curid}).Select(bson.M{"offlinetime": 1}).One(&offtime); err != nil {
-		fmt.Println("read offline time error!")
-		offtime = time.Now()
-	}
+	var off userInfo
+	// if err := cuser.Find(bson.M{"userid": curid}).Select(bson.M{"offlinetime": 1}).One(&offtime); err != nil {
+	// 	fmt.Println("read offline time error!")
+	// 	offtime = time.Now()
+	// }
+	cuser.Find(bson.M{"userid": curid}).One(&off)
+	offtime = off.Offlinetime
 	roomsin := usermap[curid].ChatRooms
 	var privmsg []privMsg
 	cprivmsg := db.C("privmsg")
-	if err := cprivmsg.Find(bson.M{"tgtid": curid, "time": bson.M{"$gte": offtime}}).All(&privmsg); err != nil {
+	if err := cprivmsg.Find(&bson.M{"tgtid": curid, "time": &bson.M{"$gte": offtime}}).All(&privmsg); err != nil {
 		panic(err)
 	}
 	for _, eachpmsg := range privmsg {
@@ -297,7 +310,7 @@ func pullmsg(db *mgo.Database, curid int64, conn net.Conn) {
 	crmmsg := db.C("roommsg")
 	for _, room := range roomsin {
 		var oneroommsg []roomMsg
-		crmmsg.Find(bson.M{"roomid": room, "time": bson.M{"$gte": offtime}}).All(&oneroommsg)
+		crmmsg.Find(&bson.M{"roomid": room, "time": &bson.M{"$gte": offtime}}).All(&oneroommsg)
 		roommsg = append(roommsg, oneroommsg...)
 	}
 	for _, eachrmsg := range roommsg {
@@ -325,28 +338,31 @@ func casePrivchatReq(data []byte, currUserID int64, db *mgo.Database, msgchannel
 	privChatNotify.Content = privChatReq.Content
 
 	//target is online, send notify msg to channel
-	if tgtchannel, online := msgchannel[privChatReq.Target]; online {
-		if privChatReq.Target != currUserID {
-			notifytype := protocol.MsgType_MT_PRIVCHAT_NOYIFY
-			notifymsg, err := proto.Marshal(privChatNotify)
-			if err != nil {
-				fmt.Println("marshal faliled!")
+	if _, exist := usermap[privChatReq.Target]; exist {
+		if tgtchannel, online := msgchannel[privChatReq.Target]; online {
+			if privChatReq.Target != currUserID {
+				notifytype := protocol.MsgType_MT_PRIVCHAT_NOYIFY
+				notifymsg, err := proto.Marshal(privChatNotify)
+				if err != nil {
+					fmt.Println("marshal faliled!")
+				}
+				notify, err := writeBuffer(notifytype, notifymsg)
+				if err != nil {
+					panic(err)
+				}
+				tgtchannel <- notify.Bytes()
+				//write in cache
+				pMsg = append(pMsg, privMsg{currUserID, privChatReq.Target, time.Now(), privChatReq.Content})
 			}
-			notify, err := writeBuffer(notifytype, notifymsg)
-			if err != nil {
-				panic(err)
-			}
-			tgtchannel <- notify.Bytes()
-			//write in cache
-			pMsg = append(pMsg, privMsg{currUserID, privChatReq.Target, time.Now(), privChatReq.Content})
+		} else {
+			//offline write db
+			cpmsg := db.C("privmsg")
+			cpmsg.Insert(&privMsg{currUserID, privChatReq.Target, time.Now(), privChatReq.Content})
+			privChatResp.Ec = protocol.ErrorCode_EC_CHAT_TARGET_OFFLINE
 		}
 	} else {
-		//offline write db
-		cpmsg := db.C("privmsg")
-		cpmsg.Insert(&privMsg{currUserID, privChatReq.Target, time.Now(), privChatReq.Content})
-		privChatResp.Ec = protocol.ErrorCode_EC_CHAT_TARGET_OFFLINE
+		privChatResp.Ec = protocol.ErrorCode_EC_CHAT_NO_TARGET
 	}
-
 	//response info
 	resptype = protocol.MsgType_MT_PRIVCHAT_RESPONSE
 	respbody, err = proto.Marshal(privChatResp)
@@ -356,7 +372,7 @@ func casePrivchatReq(data []byte, currUserID int64, db *mgo.Database, msgchannel
 	return
 }
 func caseRmCreateReq(data []byte, currUserID int64, msgchannel map[int64]chan []byte,
-	idgetter *IDgetter, db *mgo.Database) (respbody []byte, resptype protocol.MsgType, err error) {
+	iddist *IDdistributor, db *mgo.Database) (respbody []byte, resptype protocol.MsgType, err error) {
 	fmt.Printf("curID in rmcreat is [%d]", currUserID)
 	rmChatCreatReq := &protocol.RoomCreateRequest{}
 	rmChatCreatResp := &protocol.RoomCreateResponse{}
@@ -366,7 +382,10 @@ func caseRmCreateReq(data []byte, currUserID int64, msgchannel map[int64]chan []
 	}
 	fmt.Println(rmChatCreatReq.Name)
 	//sync
-	rmChatCreatResp.RoomID = idgetter.spanNextID()
+	rmChatCreatResp.RoomID = iddist.spanNextID()
+	if _, err := db.C("roomid").Upsert(nil, bson.M{"$set": bson.M{"rmid": iddist.roomid}}); err != nil {
+		fmt.Println("upsert->", err)
+	}
 	rmChatCreatResp.Ec = protocol.ErrorCode_EC_OK
 
 	if _, online := roommap[rmChatCreatResp.RoomID]; online {
@@ -377,7 +396,8 @@ func caseRmCreateReq(data []byte, currUserID int64, msgchannel map[int64]chan []
 		pchatroom.Roomname = rmChatCreatReq.Name
 		pchatroom.Memid = []int64{currUserID}
 		roommap[rmChatCreatResp.RoomID] = pchatroom
-		croom := db.C("roominfo")
+		usermap[currUserID].ChatRooms = append(usermap[currUserID].ChatRooms, pchatroom.Roomid)
+		croom := db.C("rooms")
 		croom.Insert(pchatroom)
 	}
 	//response info
@@ -403,7 +423,7 @@ func caseRmjoinReq(data []byte, curID int64, db *mgo.Database,
 		rmJoinResp.Ec = protocol.ErrorCode_EC_OK
 		pchatroom.Memid = append(pchatroom.Memid, curID)
 		usermap[curID].ChatRooms = append(usermap[curID].ChatRooms, rmJoinReq.RoomID)
-		croom := db.C("roominfo")
+		croom := db.C("rooms")
 		croom.Update(bson.M{"roomid": rmJoinReq.RoomID},
 			bson.M{"$push": bson.M{
 				"memid": curID,
@@ -434,9 +454,9 @@ func caseRmchatReq(data []byte, curID int64, msgchannel map[int64]chan []byte,
 	rmchatNotify.RoomID = rmChatReq.RoomID
 	rmchatNotify.Content = rmChatReq.Content
 
-	if _, exist := roommap[rmChatReq.RoomID]; exist == true {
+	if _, exist := roommap[rmChatReq.RoomID]; exist {
 		for _, groupUser := range roommap[rmChatReq.RoomID].Memid {
-			if _, online := msgchannel[groupUser]; online == true {
+			if _, online := msgchannel[groupUser]; online && groupUser != curID {
 				notifytype := protocol.MsgType_MT_RMCHAT_NOTIFY
 				notifymsg, err := proto.Marshal(rmchatNotify)
 				if err != nil {
@@ -449,7 +469,7 @@ func caseRmchatReq(data []byte, curID int64, msgchannel map[int64]chan []byte,
 				msgchannel[groupUser] <- notify.Bytes()
 			}
 		}
-		cpmsg := db.C("roomsg")
+		cpmsg := db.C("roommsg")
 		cpmsg.Insert(&roomMsg{rmChatReq.RoomID, curID, rmChatReq.Content, time.Now()})
 	} else {
 		rmChatResp.Ec = protocol.ErrorCode_EC_ROOM_NO_ROOM
