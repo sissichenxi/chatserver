@@ -328,8 +328,10 @@ func chatRespParse(msgbody []byte, offline *bool) {
 	} else {
 		if privChatResp.Ec == protocol.ErrorCode_EC_OK {
 			fmt.Println("private chat OK")
-		} else {
+		} else if privChatResp.Ec == protocol.ErrorCode_EC_CHAT_NO_TARGET {
 			fmt.Println("Target Not Found")
+		} else {
+			fmt.Println("Target Off Line")
 		}
 	}
 }
