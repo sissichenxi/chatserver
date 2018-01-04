@@ -22,12 +22,12 @@ type roomMsg struct {
 	Time    time.Time `bson:"time"`
 }
 
-type IDgetter struct {
+type IDdistributor struct {
 	roomid int64
 	mu     sync.Mutex
 }
 
-func (idget *IDgetter) spanNextID() (nextid int64) {
+func (idget *IDdistributor) spanNextID() (nextid int64) {
 	idget.mu.Lock()
 	idget.roomid++
 	nextid = idget.roomid
@@ -55,4 +55,8 @@ func (rmmsg *roomMsg) ResolveMsg() []byte {
 		panic(err)
 	}
 	return notify.Bytes()
+}
+
+type roomID struct {
+	Roomid int64 `bson:"rmid"`
 }
